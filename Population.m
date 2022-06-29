@@ -82,7 +82,21 @@ classdef Population < handle
         function [trueError] = findTrueError(obj)
             %METHOD1 Summary of this method goes here
             %   Detailed explanation goes here
-            varianceIntegral = trapz(obj.xVals, obj.popFunction(obj.popCoeffs, obj.xVals));
+
+            popVariance = @(x) obj.popFunction(obj.popCoeffs, x);
+            photonVariance = @(x) popVariance(x) + obj.photonErrorFunc(obj.photonErrorCoeffs, x);
+            photonMean = @(x) photonVariance(x); % Poisson variables
+
+            % This gets a little kooky but I think I got it. TODO comment what's going on here
+            gainVariance = obj.gainSigma^2;
+            gainMean = 1; % ASSUMING gain mean stays 1 because we only really care about the variation, so variation around unity is fine
+
+            productVariance = @(x) ((photonVariance(x) + (photonMean(x).^2)).*(gainVariance+gainMean)) - (photonMean(x).^2);
+
+            electronVariance = @(x) productVariance(x) + obj.electronErrorFunc(obj.electronErrorCoeffs, x);
+
+            varianceIntegral = trapz(obj.xVals, electronVariance(obj.xVals));
+
             trueError = varianceIntegral^0.5;
         end
 
@@ -95,6 +109,21 @@ classdef Population < handle
             electronNoise = obj.electronErrorFunc(obj.electronErrorCoeffs, x);
 
             expectedValue = ((pop+photonNoise).*gain) + electronNoise;
+        end
+
+        function [integrals, monteCarloError] = getMonteCarloError(obj)
+            numRuns = 10000;
+            
+            integrals = zeros(1, numRuns);
+
+            for i = 1:numRuns
+                newData = makeSample(obj);
+                [fitData, ~, ~, ~] = cf(obj.xVals, newData, obj.popFunction, obj.popCoeffs, 1);
+
+                integrals(i) = abs(trapz(obj.xVals, fitData));
+            end
+            monteCarloError = std(integrals);
+
         end
 
         %% Plotting
@@ -155,11 +184,11 @@ classdef Population < handle
         function [] = plotMonteCarloDistribution(obj)
             x = obj.xVals;
 
-            [integrals, mcError] = mc(x, obj.popSample, obj.popFunction, obj.popCoeffs);
+            [integrals, mcError] = obj.getMonteCarloError();
 
             subplot(1, 3, 3);
             hold on;
-            histogram(integrals, 40);
+            histogram(integrals, 20);
             hold off;
             title(strcat('Monte-Carlo Error:', {' '}, int2str(mcError)));
             
